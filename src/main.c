@@ -13,6 +13,37 @@ typedef int16_t i16;
 typedef int32_t i32;
 typedef int64_t i64;
 
+
+enum CMD_TYPE {
+    CMD_CONTINUE,
+    CMD_MAX,
+};
+
+struct token {
+    const char* start;
+    u8 size;
+};
+
+struct command {
+    enum CMD_TYPE cmd_type;
+};
+
+void tokenize(const char* cmd, struct token* tokens) {
+    const char* start = cmd;
+    const char* cur = cmd;
+    struct token* cur_token = tokens[0];
+    while(*cur != '\0') {
+        
+    }
+}
+
+enum CMD_TYPE command_parser(const char* cmd) {
+    struct token* tokens = (struct token*)VirtualAlloc(NULL, sizeof(struct token) * 32, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    tokenize(cmd, tokens);
+
+    return CMD_MAX;
+}
+
 void print(const char* format, ...) {
     va_list args;
     va_start(args, format);
@@ -129,6 +160,7 @@ int mainCRTStartup() {
         ReadConsole(h_input, input_buffer, sizeof(input_buffer), &input_size, NULL);
         // print("%s%s", "ReadConsole :", input_buffer);
 
+        command_parser(input_buffer);
         if (input_buffer[0] == 'g') {
             ContinueDebugEvent(
                 dbg_event.dwProcessId,
