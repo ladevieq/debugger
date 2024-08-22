@@ -1,33 +1,27 @@
 #include <Windows.h>
-#include <winbase.h>
 #include <strsafe.h>
-#include <winuser.h>
 
 #include "types.h"
+
 #include "utils.c"
 
+static HANDLE h_input = NULL;
 static u8 is_open = TRUE;
 static u8 process_commands = TRUE;
 static u8 expect_single_step = FALSE;
 static DWORD continue_status = DBG_EXCEPTION_NOT_HANDLED;
-static HANDLE h_input = NULL;
-
-enum CMD_TYPE {
-    CMD_CONTINUE,
-    CMD_PRINT_REG,
-    CMD_STEP_INTO,
-    CMD_QUIT,
-    CMD_DUMP_MEMORY,
-    CMD_UNKNOWN,
-};
+static DEBUG_EVENT dbg_event;
+static PROCESS_INFORMATION proc_info;
 
 enum TOKEN_TYPE {
+    // Commands
     TOKEN_CONTINUE,
     TOKEN_PRINT_REG,
     TOKEN_STEP_INTO,
     TOKEN_DUMP_MEMORY,
     TOKEN_QUIT,
 
+    // Primaries
     TOKEN_DECIMAL_NUMBER,
     TOKEN_HEXADECIMAL_NUMBER,
 
@@ -41,38 +35,25 @@ struct token {
 };
 
 struct command {
-    enum CMD_TYPE type;
-    struct token name;
-    struct token args[2];
-};
-
-static char* commands[] = {
-    "g",
-    "r",
-    "t",
-    "db",
-    "q",
-};
-
-struct cmd {
     const char* start;
     u8 size;
 };
 
-static struct cmd cmds[] = {
+struct ast_node {
+    struct token* token;
+    struct ast_node* left;
+    struct ast_node* right;
+};
+
+static struct command commands[] = {
     { .start = "g", .size = 1 },
     { .start = "r", .size = 1 },
     { .start = "t", .size = 1 },
-    { .start = "q", .size = 1 },
     { .start = "db", .size = 2 },
+    { .start = "q", .size = 1 },
 };
 
-struct ast_node {
-    struct token token;
-    u8 left;
-};
-
-_Static_assert((sizeof(commands) / sizeof(commands[0])) == CMD_UNKNOWN, "Missing commands");
+_Static_assert((sizeof(commands) / sizeof(commands[0])) == TOKEN_QUIT + 1, "Missing commands");
 
 u8 is_end(char c) {
     return c == '\0';
@@ -131,9 +112,9 @@ void lexer(const char* str_cmd, size_t str_cmd_len, struct token* tokens) {
             cur_token->lexeme = start;
             cur_token->size = (u8)(cur - start);
 
-            for(int i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
-                const char* cur_cmd = cmds[i].start;
-                if (CompareStringA(LOCALE_SYSTEM_DEFAULT, 0, cur_cmd, cmds[i].size, cur_token->lexeme, cur_token->size) == CSTR_EQUAL) {
+            for(int i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
+                struct command cur_cmd = commands[i];
+                if (CompareStringA(LOCALE_SYSTEM_DEFAULT, 0, cur_cmd.start, cur_cmd.size, cur_token->lexeme, cur_token->size) == CSTR_EQUAL) {
                     cur_token->type = i;
                     cur_token++;
                     break;
@@ -145,130 +126,95 @@ void lexer(const char* str_cmd, size_t str_cmd_len, struct token* tokens) {
     }
 }
 
-void parse_command(struct token* tokens, struct ast_node* nodes)
-{
-    if (tokens[0].type <= TOKEN_DECIMAL_NUMBER) {
-        nodes[0].token = tokens[0];
+struct ast_node* parse_primary(struct token* tokens, struct ast_node* nodes) {
+    struct ast_node* cur_node = &nodes[0];
+    struct token* cur_token = &tokens[0];
+    if (cur_token->type == TOKEN_HEXADECIMAL_NUMBER ||
+        cur_token->type == TOKEN_DECIMAL_NUMBER) {
+        cur_node->token = cur_token;
+        cur_node->left = NULL;
+        cur_node->right = NULL;
+        return cur_node;
     } else {
-        print("%s must be a command\n", tokens[0].lexeme);
+        print("Expecting a primary token\n");
+        return NULL;
     }
 }
 
-void parser(struct token* tokens, struct ast_node* nodes) {
-    if (tokens[0].type <= TOKEN_DECIMAL_NUMBER) {
-        nodes[0].token = tokens[0];
-    }
-}
-
-void tokenize(const char* str_cmd, size_t str_cmd_len, struct command* cmd) {
-    const char* cur = str_cmd;
-    str_cmd_len = 0;
-
-    cmd->type = CMD_UNKNOWN;
-    cmd->name.lexeme = NULL;
-    cmd->name.size = 0;
-
-    for(int i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
-        char* cur_cmd = commands[i];
-        size_t cur_cmd_len = 0U;
-        StringCchLengthA(cur_cmd, 16U, &cur_cmd_len);
-        if (CompareStringA(LOCALE_SYSTEM_DEFAULT, 0, cur_cmd,(int)cur_cmd_len, str_cmd, (int)cur_cmd_len) == CSTR_EQUAL) {
-            cmd->name.lexeme = cur;
-            cmd->name.size = (u8)cur_cmd_len;
-            cmd->type = i;
-            cur += cur_cmd_len;
-            break;
-        }
-    }
-
-    if (cmd->type < CMD_DUMP_MEMORY) {
-        return;
-    }
-
-    struct token* cur_args = cmd->args;
-    while(*cur != '\0' && *cur != '\r' && *cur != '\n'
-        || cur_args - cmd->args >= sizeof(cmd->args) / sizeof(cmd->args[0])) {
-        if (*cur != ' ') {
-            cur_args->lexeme = cur;
-            cur++;
-            while (*cur != ' ' && *cur != '\r') {
-                cur++;
-            }
-            cur_args->size = (u8)(cur - cur_args->lexeme);
-            cur_args++;
-        }
-        else {
-            cur++;
-        }
-    }
-}
-
-void dump_cmd(struct command* cmd) {
-    switch(cmd->type) {
-        case CMD_CONTINUE: {
-            print("%s\n", "continue");
-            break;
-        }
-        case CMD_UNKNOWN:
-            print("%s\n", "unknown command encountered");
-            break;
+struct ast_node* parse_command(struct token* tokens, struct ast_node* nodes)
+{
+    struct ast_node* cur_node = &nodes[0];
+    struct token* cur_token = &tokens[0];
+    switch(cur_token->type) {
+        case TOKEN_CONTINUE:
+            tokens++;
+            print("TOKEN_CONTINUE\n");
+            cur_node->token = cur_token;
+            cur_node->left = NULL;
+            cur_node->right = NULL;
+            return cur_node;
+        case TOKEN_PRINT_REG:
+            tokens++;
+            print("TOKEN_PRINT_REG\n");
+            cur_node->token = cur_token;
+            cur_node->left = NULL;
+            cur_node->right = NULL;
+            return cur_node;
+        case TOKEN_STEP_INTO:
+            tokens++;
+            print("TOKEN_STEP_INTO\n");
+            cur_node->token = cur_token;
+            cur_node->left = NULL;
+            cur_node->right = NULL;
+            return cur_node;
+        case TOKEN_DUMP_MEMORY:
+            tokens++;
+            print("TOKEN_DUMP_MEMORY\n");
+            cur_node->token = cur_token;
+            cur_node->left = NULL;
+            cur_node->right = parse_primary(tokens, ++nodes);
+            return cur_node;
+        case TOKEN_QUIT:
+            tokens++;
+            print("TOKEN_QUIT\n");
+            cur_node->token = cur_token;
+            cur_node->left = NULL;
+            cur_node->right = NULL;
+            return cur_node;
         default:
-            break;
+            print("%s must be a command\n", cur_token->lexeme);
+            return NULL;
     }
 }
 
-struct command command_parser(const char* str_cmd, size_t str_cmd_len) {
-    struct command cmd;
-    cmd.type = 0;
-    struct token tokens[64U];
-
-    lexer(str_cmd, str_cmd_len, tokens);
-
-    u32 index = 0;
-    while(tokens[index].type != TOKEN_UNKNOWN) {
-        if(tokens[index].type == TOKEN_DECIMAL_NUMBER) {
-            print("Decimal umber\n");
-        } else if(tokens[index].type == TOKEN_HEXADECIMAL_NUMBER) {
-            print("Hexadecimal number\n");
-        } else if(tokens[index].type == TOKEN_CONTINUE) {
-            print("Continue\n");
-        } else if(tokens[index].type == TOKEN_PRINT_REG) {
-            print("Print reg\n");
-        } else if(tokens[index].type == TOKEN_STEP_INTO) {
-            print("Print step into\n");
-        } else if(tokens[index].type == TOKEN_QUIT) {
-            print("Print quit\n");
-        } else if(tokens[index].type == TOKEN_DUMP_MEMORY) {
-            print("Print dump memory\n");
-        }
-        index++;
+u64 eval_number(const struct ast_node* node) {
+    if (node->token->type == TOKEN_DECIMAL_NUMBER ||
+        node->token->type == TOKEN_HEXADECIMAL_NUMBER) {
+        return atou64(node->token->lexeme, node->token->size);
     }
-
-    // tokenize(str_cmd, str_cmd_len, &cmd);
-    // dump_cmd(&cmd);
-
-    return cmd;
+    return ~0U;
 }
 
-void interp_command(struct command* cmd, LPDEBUG_EVENT dbg_event) {
+void run(struct ast_node* root) {
+    struct ast_node cur_node = root[0];
     CONTEXT ctx = {
         .ContextFlags = CONTEXT_ALL,
     };
     HANDLE h_thread = OpenThread(
         THREAD_GET_CONTEXT | THREAD_SET_CONTEXT,
         FALSE,
-        dbg_event->dwThreadId
+        dbg_event.dwThreadId
     );
     GetThreadContext(h_thread, &ctx);
 
-    if (cmd->type == CMD_CONTINUE) {
+    if (cur_node.token->type == TOKEN_CONTINUE) {
         ContinueDebugEvent(
-            dbg_event->dwProcessId,
-            dbg_event->dwThreadId,
+            dbg_event.dwProcessId,
+            dbg_event.dwThreadId,
             continue_status
         );
         process_commands = FALSE;
-    } else if (cmd->type == CMD_PRINT_REG) {
+    } else if (cur_node.token->type == TOKEN_PRINT_REG) {
         print("RIP : %x\n", ctx.Rip);
         print("RAX : %x\n", ctx.Rax);
         print("RCX : %x\n", ctx.Rcx);
@@ -279,23 +225,40 @@ void interp_command(struct command* cmd, LPDEBUG_EVENT dbg_event) {
         print("RSI : %x\n", ctx.Rsi);
         print("RDI : %x\n", ctx.Rdi);
         process_commands = TRUE;
-    } else if (cmd->type == CMD_STEP_INTO) {
+    } else if (cur_node.token->type == TOKEN_STEP_INTO) {
         ctx.EFlags |= 0x100; // TRAP_FLAG
         if(SetThreadContext(h_thread, &ctx) == 0) {
             __debugbreak();
         }
         ContinueDebugEvent(
-            dbg_event->dwProcessId,
-            dbg_event->dwThreadId,
+            dbg_event.dwProcessId,
+            dbg_event.dwThreadId,
             continue_status
         );
         expect_single_step = TRUE;
         process_commands = FALSE;
-    } else if (cmd->type == CMD_QUIT) {
+    } else if (cur_node.token->type == TOKEN_QUIT) {
         is_open = FALSE;
         process_commands = FALSE;
-    } else if (cmd->type == CMD_DUMP_MEMORY) {
-        // ReadProcessMemory(dbg_event.)
+    } else if (cur_node.token->type == TOKEN_DUMP_MEMORY) {
+        u64 addr = eval_number(cur_node.right);
+        u8 buf[16U] = {};
+        size_t b_read = 0U;
+
+        HRESULT hr = ReadProcessMemory(
+            proc_info.hProcess,
+            (void*)addr,
+            buf,
+            sizeof(buf),
+            &b_read
+        );
+
+        if (hr > 0) {
+            print("%b %b %b %b %b %b %b %b %b %b %b %b %b %b %b %b\n", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15]);
+        } else {
+            print("Unable to read memory at this address\n");
+        }
+
     } else {
         print("Command unknown\n");
         process_commands = TRUE;
@@ -304,12 +267,28 @@ void interp_command(struct command* cmd, LPDEBUG_EVENT dbg_event) {
     CloseHandle(h_thread);
 }
 
+u8 interpreter(const char* str_cmd, size_t str_cmd_len) {
+    struct token tokens[64U];
+    struct ast_node nodes[64U];
+
+    lexer(str_cmd, str_cmd_len, tokens);
+
+    struct ast_node* root = parse_command(tokens, nodes);
+
+    if(root == NULL) {
+        print("Ill formed command\n");
+        return FALSE;
+    }
+
+    run(root);
+    return TRUE;
+}
+
 int mainCRTStartup() {
 
     STARTUPINFOW startup_info = {
         .cb = sizeof(startup_info),
     };
-    PROCESS_INFORMATION proc_info;
 
     BOOL ret = CreateProcessW(
         NULL,
@@ -338,7 +317,6 @@ int mainCRTStartup() {
     SetConsoleMode(h_input, console_mode);
 
     while(is_open) {
-        DEBUG_EVENT dbg_event;
         WaitForDebugEventEx(&dbg_event, INFINITE);
 
         continue_status = DBG_EXCEPTION_NOT_HANDLED;
@@ -404,9 +382,7 @@ int mainCRTStartup() {
             DWORD input_size = 0U;
             ReadConsole(h_input, input_buffer, sizeof(input_buffer), &input_size, NULL);
 
-            struct command cmd = command_parser(input_buffer, input_size);
-            cmd.type = 0;
-            // interp_command(&cmd, &dbg_event);
+            interpreter(input_buffer, input_size);
         }
     }
 

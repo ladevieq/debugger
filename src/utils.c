@@ -1,8 +1,3 @@
-#include <strsafe.h>
-#include <Windows.h>
-
-#include "types.h"
-
 void u64toa(u64 number, char* str, u32 base) {
     static char codes[16U] = {
         '0',
@@ -43,6 +38,52 @@ void u64toa(u64 number, char* str, u32 base) {
     }
 }
 
+u64 atou64(const char* str, u32 len) {
+    static char codes[16U] = {
+        '0',
+        '1',
+        '2',
+        '3',
+        '4',
+        '5',
+        '6',
+        '7',
+        '8',
+        '9',
+        'A',
+        'B',
+        'C',
+        'D',
+        'E',
+        'F',
+    };
+    u64 number = 0U;
+    u32 base = 10U;
+    const char* c = str;
+
+    if (str[0] == '0' && str[1] == 'x') {
+        base = 16U;
+        c += 2U;
+    }
+
+    for (; (u32)(c - str) < len; c++) {
+        u32 offset = 0U;
+        if ('0' <= *c && *c <= '9') {
+            offset = 48U;
+        } else if ('a' <= *c && *c <= 'f') {
+            offset = 97U;
+        } else if ('A' <= *c && *c <= 'F') {
+            offset = 65U;
+        } else {
+            return 0U;
+        }
+
+        number += (*c - offset) * ((len - (u32)(c - str)) * base);
+    }
+
+    return number;
+}
+
 void print(const char* format, ...) {
     va_list args;
     va_start(args, format);
@@ -65,6 +106,12 @@ void print(const char* format, ...) {
                 char c = va_arg(args, char);
                 StringCchCatA(cur_char, 1U, &c);
                 cur_char += 1U;
+            } else if(*cur_fmt == 'b') {
+                u8 number = va_arg(args, u8);
+                u64toa((u64)number, cur_char, 10);
+                size_t length = 0U;
+                StringCchLengthA(formatted_str, sizeof(formatted_str), &length);
+                cur_char = formatted_str + length;
             } else if(*cur_fmt == 'u') {
                 u64 number = va_arg(args, u64);
                 u64toa(number, cur_char, 10);
@@ -73,6 +120,10 @@ void print(const char* format, ...) {
                 cur_char = formatted_str + length;
             } else if(*cur_fmt == 'x') {
                 u64 number = va_arg(args, u64);
+                *cur_char = '0';
+                cur_char++;
+                *cur_char = 'x';
+                *cur_char++;
                 u64toa(number, cur_char, 16);
                 size_t length = 0U;
                 StringCchLengthA(formatted_str, sizeof(formatted_str), &length);
