@@ -141,8 +141,7 @@ struct ast_node* parse_primary(struct token* tokens, struct ast_node* nodes) {
     }
 }
 
-struct ast_node* parse_command(struct token* tokens, struct ast_node* nodes)
-{
+struct ast_node* parse_command(struct token* tokens, struct ast_node* nodes) {
     struct ast_node* cur_node = &nodes[0];
     struct token* cur_token = &tokens[0];
     switch(cur_token->type) {
@@ -242,7 +241,7 @@ void run(struct ast_node* root) {
         process_commands = FALSE;
     } else if (cur_node.token->type == TOKEN_DUMP_MEMORY) {
         u64 addr = eval_number(cur_node.right);
-        u8 buf[16U] = {};
+        u8 buf[16U] = { 0 };
         size_t b_read = 0U;
 
         HRESULT hr = ReadProcessMemory(
