@@ -46,6 +46,7 @@ u8 read_memory(const void* addr, void* buffer, size_t size) {
 }
 
 #include "parser.c"
+#include "pdb.c"
 #include "events.c"
 
 void dbg_loop() {
