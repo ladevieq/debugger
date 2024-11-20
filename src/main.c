@@ -3,6 +3,7 @@
 #include <strsafe.h>
 
 #include "types.h"
+#include "module.h"
 
 #include "utils.c"
 
@@ -14,28 +15,6 @@ static u8 expect_single_step = FALSE;
 static DWORD continue_status = DBG_EXCEPTION_NOT_HANDLED;
 static DEBUG_EVENT dbg_event;
 static PROCESS_INFORMATION proc_info = { 0 };
-
-struct module {
-    u8 fix_compilation;
-};
-
-static struct module mods[64U] = { 0U };
-static u64 mods_list = 0U;
-
-u8 add_mod() {
-    u64 free_mods = ~mods_list;
-    assert(!free_mods);
-    u8 mod_index = (u8)(free_mods >> (_lzcnt_u64(free_mods) + 1U));
-    // struct module* mod = &mods[mod_index];
-
-
-
-    return mod_index;
-};
-
-void remove_mod(u8 mod_index) {
-    mods_list ^= (u64)(0x1 << (((i8)mod_index) - 1U));
-}
 
 /* Read debugged process memory at address */
 u8 read_memory(const void* addr, void* buffer, size_t size) {

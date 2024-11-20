@@ -1,8 +1,26 @@
+#include "cvinfo.h"
+
+enum STREAM_INDEX {
+    OLD_DIRECTORY,
+    PDB,
+    TPI,
+    DBI,
+    IPI,
+};
+
+enum SYMBOL_KIND {
+    OBJNAME = 0x1101,
+    PUBLIC = 0x110e,
+    GPROC32 = 0x1110,
+    COMPIL3 = 0x113C,
+};
+
 void open_pdb(const char* pdb_path) {
     HANDLE pdb_file = CreateFileA(pdb_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
     if (pdb_file == INVALID_HANDLE_VALUE) {
         print("Cannot open pdb file at path %s due to error %u\n", pdb_path, GetLastError());
+        return;
     }
 
     // MSF superblock
@@ -24,24 +42,27 @@ void open_pdb(const char* pdb_path) {
     u32 dir_addr = (superblock.block_map_addr - 1U) * sizeof(block);
     SetFilePointer(pdb_file, dir_addr, NULL, FILE_BEGIN);
     ReadFile(pdb_file, (void*)block, superblock.num_directory_bytes, (LPDWORD)&b_read, NULL);
+
+    // Loog through streams
     u32 num_streams = ((u32*)block)[0U];
     u32* stream_sizes = &((u32*)block)[1U];
     u32* stream_blocks = stream_sizes + num_streams;
-    u32* pdb_info_stream_blocks = NULL;
-    u32* pdb_DBI_stream_blocks = NULL;
+    u32* stream_blocks_indices[1024U] = { 0U };
 
     u32 block_index = 0U;
     for(u32 stream_id = 0u; stream_id < num_streams; stream_id++) {
         print("PDB stream size : %u\n", stream_sizes[stream_id]);
-        if (stream_id == 1U) {
-            pdb_info_stream_blocks = &stream_blocks[block_index];
-        }
-        if (stream_id == 3U) {
-            pdb_DBI_stream_blocks = &stream_blocks[block_index];
-        }
+
         if (stream_sizes[stream_id] == (u32)-1) {
+            print("PDB stream blocks : NONE\n");
             continue;
         }
+
+        if (stream_sizes[stream_id] == 0U) {
+            continue;
+        }
+
+        stream_blocks_indices[stream_id] = &stream_blocks[block_index];
         for(u32 id = 0u; id < (stream_sizes[stream_id] / sizeof(block)) + 1U; id++) {
             print("PDB stream blocks : %u\n", stream_blocks[block_index]);
             block_index++;
@@ -57,12 +78,11 @@ void open_pdb(const char* pdb_path) {
     };
 
     struct pdb_info_stream pdb_info_stream = { 0U };
-    SetFilePointer(pdb_file, pdb_info_stream_blocks[0U] * sizeof(block), NULL, FILE_BEGIN);
+    SetFilePointer(pdb_file, stream_blocks_indices[PDB][0U] * sizeof(block), NULL, FILE_BEGIN);
     ReadFile(pdb_file, (void*)&pdb_info_stream, sizeof(pdb_info_stream), (LPDWORD)&b_read, NULL);
-    pdb_info_stream;
 
     // DBI Stream
-    struct pdb_DBI_stream {
+    struct DBI_stream_header {
         i32 version_signature;
         u32 version_header;
         u32 age;
@@ -84,13 +104,89 @@ void open_pdb(const char* pdb_path) {
         u16 machine;
         u32 padding;
     };
-    struct pdb_DBI_stream pdb_DBI_stream = { 0U };
-    SetFilePointer(pdb_file, pdb_DBI_stream_blocks[0U] * sizeof(block), NULL, FILE_BEGIN);
-    ReadFile(pdb_file, (void*)&pdb_DBI_stream, sizeof(pdb_DBI_stream), (LPDWORD)&b_read, NULL);
-    print("");
-    pdb_DBI_stream;
+
+    struct mod_info {
+        u32 Unused1;
+        struct SectionContribEntry {
+            u16 Section;
+            u8 Padding1[2];
+            i32 Offset;
+            i32 Size;
+            u32 Characteristics;
+            u16 ModuleIndex;
+            u8 Padding2[2];
+            u32 DataCrc;
+            u32 RelocCrc;
+        } SectionContr;
+        u16 Flags;
+        u16 ModuleSymStream;
+        u32 SymByteSize;
+        u32 C11ByteSize;
+        u32 C13ByteSize;
+        u16 SourceFileCount;
+        u8 Padding[2];
+        u32 Unused2;
+        u32 SourceFileNameIndex;
+        u32 PdbFilePathNameIndex;
+    } *modules_info[64U];
+    u8* modules_name[64U] = { 0U };
+    u8* obj_files_name[64U] = { 0U };
+    u8 DBI_block[4096U] = { 0U };
+    SetFilePointer(pdb_file, stream_blocks_indices[DBI][0U] * sizeof(block), NULL, FILE_BEGIN);
+    ReadFile(pdb_file, (void*)&DBI_block, sizeof(DBI_block), (LPDWORD)&b_read, NULL);
+    struct DBI_stream_header* DBI_stream_header = (struct DBI_stream_header*)DBI_block;
+
+    i32 byte_index = sizeof(*DBI_stream_header);
+    for (u32 module_index = 0U; byte_index < DBI_stream_header->mod_info_size; module_index++) {
+        modules_info[module_index] = (struct mod_info*)&DBI_block[byte_index];
+        modules_name[module_index] = &DBI_block[byte_index + sizeof(struct mod_info)];
+        print("Module symbole stream index %xu\n", modules_info[module_index]->ModuleSymStream);
+        print("%s\n", modules_name[module_index]);
+        size_t module_name_length = 0U;
+        StringCchLengthA((STRSAFE_LPSTR)modules_name[module_index], STRSAFE_MAX_CCH, &module_name_length);
+        obj_files_name[module_index] = &DBI_block[byte_index + sizeof(struct mod_info) + module_name_length + 1U];
+
+        print("%s\n", obj_files_name[module_index]);
+        size_t obj_file_name_length = 0U;
+        StringCchLengthA((STRSAFE_LPSTR)obj_files_name[module_index], STRSAFE_MAX_CCH, &obj_file_name_length);
+
+        u32 module_info_size = sizeof(*modules_info[0U]) + (i32)module_name_length + 1 + (i32)obj_file_name_length + 1;
+        module_info_size = ((module_info_size + 3U) * 4U) / 4U;
+        byte_index += module_info_size;
+
+        // Module Info Stream
+        u8 module_info_block[4096U] = { 0U };
+        SetFilePointer(pdb_file, stream_blocks_indices[modules_info[module_index]->ModuleSymStream][0U] * sizeof(module_info_block), NULL, FILE_BEGIN);
+        ReadFile(pdb_file, (void*)&module_info_block, sizeof(module_info_block), (LPDWORD)&b_read, NULL);
+
+        u8* symbols = &module_info_block[4U];
+        u8* cur_sym = symbols;
+        while ((u32)(cur_sym - symbols) < modules_info[module_index]->SymByteSize) {
+            struct SYMTYPE* rec = (struct SYMTYPE*)cur_sym;
+            if (rec->rectyp == OBJNAME) {
+                struct OBJNAMESYM* objname = (struct OBJNAMESYM*)cur_sym;
+                print("OBJNAME SYMBOL %s\n", objname->name);
+            } else if (rec->rectyp == PUBLIC) {
+                struct PUBSYM32* pub = (struct PUBSYM32*)cur_sym;
+                print("PUBLIC SYMBOL %s\n", pub->name);
+            } else if (rec->rectyp == GPROC32) {
+                struct PROCSYM32* proc = (struct PROCSYM32*)cur_sym;
+                print("PROC32 SYMBOL %s\n", proc->name);
+            } else if (rec->rectyp == COMPIL3) {
+                struct COMPILESYM3* com = (struct COMPILESYM3*)cur_sym;
+                print("COMPILER SYMBOL %s\n", com->verSz);
+            } else {
+                print("Unkown symbole kind %xu\n", rec->rectyp);
+            }
+            cur_sym += rec->reclen + 2U;
+        }
+    }
 
     // Global Symbol Stream
-    SetFilePointer(pdb_file, pdb_DBI_stream.global_stream_index * sizeof(block), NULL, FILE_BEGIN);
-    ReadFile(pdb_file, (void*)&pdb_DBI_stream, sizeof(pdb_DBI_stream), (LPDWORD)&b_read, NULL);
+    SetFilePointer(pdb_file, stream_blocks_indices[DBI_stream_header->global_stream_index][0U] * sizeof(block), NULL, FILE_BEGIN);
+    ReadFile(pdb_file, (void*)&block, sizeof(DBI_stream_header), (LPDWORD)&b_read, NULL);
+
+    // Public Symbol Stream
+    SetFilePointer(pdb_file, stream_blocks_indices[DBI_stream_header->public_stream_index][0U] * sizeof(block), NULL, FILE_BEGIN);
+    ReadFile(pdb_file, (void*)&block, sizeof(block), (LPDWORD)&b_read, NULL);
 }

@@ -1,13 +1,29 @@
+struct module modules[64U] = { 0U };
+u64 modules_list = ~0ULL;
+
+u8 add_module() {
+    assert(!modules_list);
+    u32 module_index = 0U;
+    _BitScanForward64((unsigned long*)&module_index, modules_list);
+    modules_list ^= (u64)(0x1 << module_index);
+
+    return (u8)module_index;
+};
+
+void remove_module(u8 module_index) {
+    modules_list |= (u64)(0x1 << (((i8)module_index) - 1U));
+}
+
 void read_name_uni(const void* name_addr, const char* name, size_t name_size) {
     u8* addr = NULL;
     if (!read_memory(name_addr, (void*)&addr, 8U)) {
-        print("%s\n", "Loading DLL : error reading dll name");
+        print("%s %u\n", "Loading DLL : error reading dll name : ", GetLastError());
         return;
     }
 
-    wchar_t name_uni[1024U] = { 0U };
+    wchar_t name_uni[256U] = { 0U };
     if (!read_memory((const void*)addr, name_uni, sizeof(name_uni))) {
-        print("Cannot read dll name from proc memory\n");
+        print("Cannot read dll name from proc memory %u\n", GetLastError());
         return;
     }
 
@@ -33,42 +49,43 @@ void read_name_ansi(const void* name_addr, const char* name, size_t name_size) {
         print("Cannot read dll name from proc memory\n");
         return;
     }
-
 }
-void load_symbols(const void* base_addr, const char* name) {
-    IMAGE_DOS_HEADER dos_header = { 0U };
-    if (!read_memory(base_addr, (void*)&dos_header, sizeof(dos_header))) {
-        print("Cannot read DOS header for module %s at address %x\n", (char*)name, base_addr);
+
+void load_symbols(const void* base_addr, const struct module* module) {
+    if (!read_memory(base_addr, (void*)&module->dos_header, sizeof(module->dos_header))) {
+        print("Cannot read DOS header for module %s at address %x\n", (char*)module->name, base_addr);
         return;
     }
 
-    IMAGE_NT_HEADERS64 nt_header = { 0U };
-    if (!read_memory((const void*)((u64)base_addr + dos_header.e_lfanew), (void*)&nt_header, sizeof(nt_header))) {
-        print("Cannot read NT header for module %s at address %x\n", (char*)name, base_addr);
+    if (!read_memory((const void*)((u64)base_addr + module->dos_header.e_lfanew), (void*)&module->nt_header, sizeof(module->nt_header))) {
+        print("Cannot read NT header for module %s at address %x\n", (char*)module->name, base_addr);
         return;
     }
+
+    print("Module Base Address %xu\n", base_addr);
+    print("Module Size %xu\n", module->nt_header.OptionalHeader.SizeOfImage);
 
     // Export table
-    IMAGE_DATA_DIRECTORY export_table = nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    IMAGE_DATA_DIRECTORY export_table = module->nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
     IMAGE_EXPORT_DIRECTORY export_dir = { 0U };
     const void* export_dir_start = (const void*)((u64)base_addr + (u64)export_table.VirtualAddress);
     const void* export_dir_end = (const void*)((u64)export_dir_start + export_table.Size);
 
     if (export_table.Size != 0U) {
         if (!read_memory((const void*)((u64)base_addr + (u64)export_table.VirtualAddress), (void*)&export_dir, sizeof(export_dir))) {
-            print("Cannot read export dir for module %s at address %x\n", (char*)name, base_addr);
+            print("Cannot read export dir for module %s at address %x\n", (char*)module->name, base_addr);
             return;
         }
 
         u16 name_ordinals[8192];
         if (!read_memory((const void*)((u64)base_addr + (u64)export_dir.AddressOfNameOrdinals), (void*)&name_ordinals, export_dir.NumberOfNames * sizeof(name_ordinals[0]))) {
-            print("Cannot read name ordinals from export directory for module %s at address %x\n", (char*)name, base_addr);
+            print("Cannot read name ordinals from export directory for module %s at address %x\n", (char*)module->name, base_addr);
             return;
         }
 
         u32 names[8192];
         if (!read_memory((const void*)((u64)base_addr + (u64)export_dir.AddressOfNames), (void*)&names, export_dir.NumberOfNames * sizeof(names[0]))) {
-            print("Cannot read names from export directory for module %s at address %x\n", (char*)name, base_addr);
+            print("Cannot read names from export directory for module %s at address %x\n", (char*)module->name, base_addr);
             return;
         }
 
@@ -85,11 +102,11 @@ void load_symbols(const void* base_addr, const char* name) {
 
 
     // Private symbols
-    IMAGE_DATA_DIRECTORY debug_table = nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+    IMAGE_DATA_DIRECTORY debug_table = module->nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
     IMAGE_DEBUG_DIRECTORY debug_entries[20U] = { 0U };
 
     if (debug_table.VirtualAddress && !read_memory((const void*)((u64)base_addr + (u64)debug_table.VirtualAddress), debug_entries, debug_table.Size)) {
-        print("Cannot read image debug infos for module %s at address %x\n", name, base_addr);
+        print("Cannot read image debug infos for module %s at address %x\n", module->name, base_addr);
         return;
     }
 
@@ -108,7 +125,7 @@ void load_symbols(const void* base_addr, const char* name) {
 
         struct codeview_header header = { 0U };
         if (!read_memory((const void*)((u64)base_addr + (u64)debug_entries[i].AddressOfRawData), (void*)&header, debug_entries[i].SizeOfData)) {
-            print("Cannot read code view header for module %s at address %x\n", (char*)name, base_addr);
+            print("Cannot read code view header for module %s at address %x\n", (char*)module->name, base_addr);
         }
 
         print("PDB path : %s\n", &header.path);
@@ -120,11 +137,21 @@ void handle_create_process() {
     print("%s\n", "CreateProcessDebugEvent");
 
     CREATE_PROCESS_DEBUG_INFO proc_dbg_info = dbg_event.u.CreateProcessInfo;
-    u8 proc_name[1024U] = { 0U };
-    read_name_uni(proc_dbg_info.lpImageName, (const char*)proc_name, sizeof(proc_name));
-    print("%s%s\n", "Loading Process : ", (char*)proc_name);
 
-    load_symbols((const void*)proc_dbg_info.lpBaseOfImage, (const char*)proc_name);
+    HANDLE hproc = OpenProcess(PROCESS_VM_READ, FALSE, dbg_event.dwProcessId);
+    hproc;
+
+    struct module* module = &modules[add_module()];
+    // https://learn.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-create_process_debug_info
+    // Debuggers must be prepared to handle the case where lpImageName is NULL or *lpImageName (in the address space of the process being debugged) is NULL.
+    // Specifically, the system does not provide an image name for a create process event
+    // module->base_addr = proc_dbg_info.lpBaseOfImage;
+    // read_name_uni(proc_dbg_info.lpImageName, (const char*)module->name, sizeof(module->name));
+    module->base_addr = proc_dbg_info.lpBaseOfImage;
+    GetFinalPathNameByHandleA(proc_dbg_info.hFile, (LPSTR)module->name, sizeof(module->name), FILE_NAME_NORMALIZED);
+    print("%s%s\n", "Loading Process : ", (char*)module->name);
+
+    load_symbols((const void*)proc_dbg_info.lpBaseOfImage, module);
 }
 
 void handle_create_thread() {
@@ -158,18 +185,19 @@ void handle_exit_thread() {
 void handle_load_dll() {
     LOAD_DLL_DEBUG_INFO dll_info = dbg_event.u.LoadDll;
     const void* dll_name_addr = dll_info.lpImageName;
-    const void* dll_base_addr = dll_info.lpBaseOfDll;
+    void* dll_base_addr = dll_info.lpBaseOfDll;
     if (dll_name_addr == NULL) {
-        print("%s\n", "Loading DLL : error read dll name");
+        print("%s\n", "Loading DLL : error reading dll name");
         return;
     }
 
-    u8 dll_name[1024U] = { 0U };
-    read_name_uni(dll_name_addr, (const char*)dll_name, sizeof(dll_name));
+    struct module* module = &modules[add_module()];
+    module->base_addr = dll_base_addr;
+    read_name_uni(dll_name_addr, (const char*)module->name, sizeof(module->name));
 
-    print("%s%s\n", "Loading DLL : ", (char*)dll_name);
+    print("%s%s\n", "Loading DLL : ", (char*)module->name);
 
-    load_symbols(dll_base_addr, (const char*)dll_name);
+    load_symbols(dll_base_addr, module);
 }
 
 void handle_unload_dll() {
@@ -182,8 +210,8 @@ void handle_output_debug_string() {
     size_t str_size = (size_t)dbg_str_event.nDebugStringLength;
     // assert(str_size > 1024U);
     u8 dbg_str[1024U] = { 0U };
-    if (read_memory(str_addr, dbg_str, str_size)) {
-        print("%s\n", "OutputDebugStringDebugEvent : error read debug string");
+    if (!read_memory(str_addr, dbg_str, str_size)) {
+        print("%s %u\n", "OutputDebugStringDebugEvent : error reading debug string : ", GetLastError());
         return;
     }
     if (dbg_str_event.fUnicode) {

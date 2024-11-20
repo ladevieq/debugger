@@ -1,6 +1,8 @@
 enum TOKEN_TYPE {
     // Commands
     TOKEN_CONTINUE,
+    TOKEN_CALLSTACK,
+    TOKEN_LISTMODULE,
     TOKEN_PRINT_REG,
     TOKEN_STEP_INTO,
     TOKEN_DUMP_MEMORY,
@@ -32,6 +34,8 @@ struct ast_node {
 
 static struct command commands[] = {
     { .start = "g", .size = 1 },
+    { .start = "k", .size = 1 },
+    { .start = "lm", .size = 2 },
     { .start = "r", .size = 1 },
     { .start = "t", .size = 1 },
     { .start = "db", .size = 2 },
@@ -122,6 +126,20 @@ struct ast_node* parse_command(struct token* tokens, struct ast_node* nodes) {
             cur_node->left = NULL;
             cur_node->right = NULL;
             return cur_node;
+        case TOKEN_CALLSTACK:
+            tokens++;
+            print("TOKEN_CALLSTACK\n");
+            cur_node->token = cur_token;
+            cur_node->left = NULL;
+            cur_node->right = NULL;
+            return cur_node;
+        case TOKEN_LISTMODULE:
+            tokens++;
+            print("TOKEN_LISTMODULE\n");
+            cur_node->token = cur_token;
+            cur_node->left = NULL;
+            cur_node->right = NULL;
+            return cur_node;
         case TOKEN_PRINT_REG:
             tokens++;
             print("TOKEN_PRINT_REG\n");
@@ -183,16 +201,34 @@ void run(struct ast_node* root) {
             continue_status
         );
         process_commands = FALSE;
+    } else if (cur_node.token->type == TOKEN_CALLSTACK) {
+        for (u8 index = 0U; index < 64U; index++) {
+            if (((1ULL << index) & modules_list) == 0U) {
+                struct module* module = &modules[index];
+                if ((u64)module->base_addr < ctx.Rip && ctx.Rip < ((u64)module->base_addr + module->nt_header.OptionalHeader.SizeOfImage)) {
+                    print("Function is in module name %s\n", module->name);
+                }
+            }
+        }
+    } else if (cur_node.token->type == TOKEN_LISTMODULE) {
+        for (u8 index = 0U; index < 64U; index++) {
+            if (((1ULL << index) & modules_list) == 0U) {
+                struct module* module = &modules[index];
+                print("Module Name : %s\n", module->name);
+                print("Module Base : %xu\n", module->base_addr);
+                print("Module Size : %xu\n\n", module->nt_header.OptionalHeader.SizeOfImage);
+            }
+        }
     } else if (cur_node.token->type == TOKEN_PRINT_REG) {
-        print("RIP : %x\n", ctx.Rip);
-        print("RAX : %x\n", ctx.Rax);
-        print("RCX : %x\n", ctx.Rcx);
-        print("RDX : %x\n", ctx.Rdx);
-        print("RBX : %x\n", ctx.Rbx);
-        print("RSP : %x\n", ctx.Rsp);
-        print("RBP : %x\n", ctx.Rbp);
-        print("RSI : %x\n", ctx.Rsi);
-        print("RDI : %x\n", ctx.Rdi);
+        print("RIP : %xu\n", ctx.Rip);
+        print("RAX : %xu\n", ctx.Rax);
+        print("RCX : %xu\n", ctx.Rcx);
+        print("RDX : %xu\n", ctx.Rdx);
+        print("RBX : %xu\n", ctx.Rbx);
+        print("RSP : %xu\n", ctx.Rsp);
+        print("RBP : %xu\n", ctx.Rbp);
+        print("RSI : %xu\n", ctx.Rsi);
+        print("RDI : %xu\n", ctx.Rdi);
         process_commands = TRUE;
     } else if (cur_node.token->type == TOKEN_STEP_INTO) {
         ctx.EFlags |= 0x100; // TRAP_FLAG
