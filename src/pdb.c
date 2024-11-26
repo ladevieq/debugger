@@ -140,18 +140,18 @@ void open_pdb(const char* pdb_path) {
     for (u32 module_index = 0U; byte_index < DBI_stream_header->mod_info_size; module_index++) {
         modules_info[module_index] = (struct mod_info*)&DBI_block[byte_index];
         modules_name[module_index] = &DBI_block[byte_index + sizeof(struct mod_info)];
-        print("Module symbole stream index %xu\n", modules_info[module_index]->ModuleSymStream);
-        print("%s\n", modules_name[module_index]);
+        print("Module symbol stream index %xu\n", modules_info[module_index]->ModuleSymStream);
+        print("Module name : %s\n", modules_name[module_index]);
         size_t module_name_length = 0U;
         StringCchLengthA((STRSAFE_LPSTR)modules_name[module_index], STRSAFE_MAX_CCH, &module_name_length);
         obj_files_name[module_index] = &DBI_block[byte_index + sizeof(struct mod_info) + module_name_length + 1U];
 
-        print("%s\n", obj_files_name[module_index]);
+        print("Obj file name : %s\n", obj_files_name[module_index]);
         size_t obj_file_name_length = 0U;
         StringCchLengthA((STRSAFE_LPSTR)obj_files_name[module_index], STRSAFE_MAX_CCH, &obj_file_name_length);
 
         u32 module_info_size = sizeof(*modules_info[0U]) + (i32)module_name_length + 1 + (i32)obj_file_name_length + 1;
-        module_info_size = ((module_info_size + 3U) * 4U) / 4U;
+        module_info_size = ((module_info_size + 3U) / 4U) * 4U;
         byte_index += module_info_size;
 
         // Module Info Stream
