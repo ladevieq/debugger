@@ -8,13 +8,6 @@ enum STREAM_INDEX {
     IPI,
 };
 
-enum SYMBOL_KIND {
-    OBJNAME = 0x1101,
-    PUBLIC = 0x110e,
-    GPROC32 = 0x1110,
-    COMPIL3 = 0x113C,
-};
-
 void open_pdb(const char* pdb_path) {
     HANDLE pdb_file = CreateFileA(pdb_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
@@ -163,22 +156,52 @@ void open_pdb(const char* pdb_path) {
         u8* cur_sym = symbols;
         while ((u32)(cur_sym - symbols) < modules_info[module_index]->SymByteSize) {
             struct SYMTYPE* rec = (struct SYMTYPE*)cur_sym;
-            if (rec->rectyp == OBJNAME) {
+            if (rec->rectyp == S_END) {
+                print("END SYMBOL\n");
+            } else if (rec->rectyp == S_FRAMEPROC) {
+                struct FRAMEPROCSYM* frameproc = (struct FRAMEPROCSYM*)cur_sym;
+                frameproc;
+                print("FRAMEPROC SYMBOL\n");
+            } else if (rec->rectyp == S_OBJNAME) {
                 struct OBJNAMESYM* objname = (struct OBJNAMESYM*)cur_sym;
                 print("OBJNAME SYMBOL %s\n", objname->name);
-            } else if (rec->rectyp == PUBLIC) {
+            } else if (rec->rectyp == S_THUNK32) {
+                struct THUNKSYM32* thunk = (struct THUNKSYM32*)cur_sym;
+                print("THUNK SYMBOL %s\n", thunk->name);
+            } else if (rec->rectyp == S_PUB32) {
                 struct PUBSYM32* pub = (struct PUBSYM32*)cur_sym;
                 print("PUBLIC SYMBOL %s\n", pub->name);
-            } else if (rec->rectyp == GPROC32) {
+            } else if (rec->rectyp == S_GPROC32) {
                 struct PROCSYM32* proc = (struct PROCSYM32*)cur_sym;
                 print("PROC32 SYMBOL %s\n", proc->name);
-            } else if (rec->rectyp == COMPIL3) {
-                struct COMPILESYM3* com = (struct COMPILESYM3*)cur_sym;
-                print("COMPILER SYMBOL %s\n", com->verSz);
+            } else if (rec->rectyp == S_REGREL32) {
+                struct REGREL32* regrel = (struct REGREL32*)cur_sym;
+                print("REGREL32 SYMBOL %s\n", regrel->name);
+            } else if (rec->rectyp == S_COMPILE2) {
+                struct COMPILESYM* compile = (struct COMPILESYM*)cur_sym;
+                compile;
+                print("COMPILE2 SYMBOL\n");
+            } else if (rec->rectyp == S_SECTION) {
+                struct SECTIONSYM* section = (struct SECTIONSYM*)cur_sym;
+                print("SECTION SYMBOL %s\n", section->name);
+            } else if (rec->rectyp == S_COFFGROUP) {
+                struct COFFGROUPSYM* coff = (struct COFFGROUPSYM*)cur_sym;
+                print("COFFGROUP SYMBOL %s\n", coff->name);
+            } else if (rec->rectyp == S_CALLSITEINFO) {
+                struct CALLSITEINFO* callsiteinfo = (struct CALLSITEINFO*)cur_sym;
+                callsiteinfo;
+                print("CALLSITEINFO SYMBOL\n");
+            } else if (rec->rectyp == S_COMPILE3) {
+                struct COMPILESYM3* compile = (struct COMPILESYM3*)cur_sym;
+                print("COMPILE3 SYMBOL %s\n", compile->verSz);
+            } else if (rec->rectyp == S_BUILDINFO) {
+                struct BUILDINFOSYM* buildinfo = (struct BUILDINFOSYM*)cur_sym;
+                buildinfo;
+                print("BUILDINFO SYMBOL\n");
             } else {
                 print("Unkown symbole kind %xu\n", rec->rectyp);
             }
-            cur_sym += rec->reclen + 2U;
+            cur_sym = (u8*)NextSym((SYMTYPE*)cur_sym);
         }
     }
 
