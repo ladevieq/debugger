@@ -3,7 +3,6 @@
 #include <strsafe.h>
 
 #include "types.h"
-#include "module.h"
 
 #include "utils.c"
 
@@ -24,6 +23,7 @@ u8 read_memory(const void* addr, void* buffer, size_t size) {
     return hr > 0 && b_read == size;
 }
 
+#include "module.c"
 #include "parser.c"
 #include "pdb.c"
 #include "events.c"

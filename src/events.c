@@ -1,19 +1,3 @@
-struct module modules[64U] = { 0U };
-u64 modules_list = ~0ULL;
-
-u8 add_module() {
-    assert(!modules_list);
-    u32 module_index = 0U;
-    _BitScanForward64((unsigned long*)&module_index, modules_list);
-    modules_list ^= (u64)(0x1 << module_index);
-
-    return (u8)module_index;
-};
-
-void remove_module(u8 module_index) {
-    modules_list |= (u64)(0x1 << (((i8)module_index) - 1U));
-}
-
 void read_name_uni(const void* name_addr, const char* name, size_t name_size) {
     u8* addr = NULL;
     if (!read_memory(name_addr, (void*)&addr, 8U)) {
