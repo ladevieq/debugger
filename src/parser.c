@@ -206,7 +206,11 @@ void run(struct ast_node* root) {
             if (((1ULL << index) & modules_list) == 0U) {
                 struct module* module = &modules[index];
                 if ((u64)module->base_addr < ctx.Rip && ctx.Rip < ((u64)module->base_addr + module->nt_header.OptionalHeader.SizeOfImage)) {
-                    print("Function is in module name %s\n", module->name);
+                    print("Module name %s\n", module->name);
+                    print("Module address %xu\n", (u64)module->base_addr);
+                    print("Module size %xu\n", module->nt_header.OptionalHeader.SizeOfImage);
+                    print("Function address %xu\n", ctx.Rip);
+                    print("Function offset in module %xu\n", ctx.Rip - (u64)module->base_addr);
                 }
             }
         }
