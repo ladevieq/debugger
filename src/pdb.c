@@ -8,7 +8,7 @@ enum STREAM_INDEX {
     IPI,
 };
 
-void open_pdb(const char* pdb_path) {
+void open_pdb(const char* pdb_path, struct module* module) {
     HANDLE pdb_file = CreateFileA(pdb_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
     if (pdb_file == INVALID_HANDLE_VALUE) {
@@ -174,6 +174,14 @@ void open_pdb(const char* pdb_path) {
             } else if (rec->rectyp == S_GPROC32) {
                 struct PROCSYM32* proc = (struct PROCSYM32*)cur_sym;
                 print("PROC32 SYMBOL %s\n", proc->name);
+                // TODO: Add string management code
+                assert(string_stack_current - 16U * 4096U < string_stack_base);
+                size_t length = 0U;
+                StringCchLengthA((PCNZCH)proc->name, STRSAFE_MAX_CCH, &length);
+                StringCchCopyA((LPSTR)string_stack_current, STRSAFE_MAX_CCH, (LPCSTR)proc->name);
+                string_stack_current[length] = '\0';
+                insert_elem(&module->symbols, proc->off + module->nt_header.OptionalHeader.BaseOfCode, proc->len + module->nt_header.OptionalHeader.BaseOfCode, (u64)string_stack_current);
+                string_stack_current += length + 1U;
             } else if (rec->rectyp == S_REGREL32) {
                 struct REGREL32* regrel = (struct REGREL32*)cur_sym;
                 print("REGREL32 SYMBOL %s\n", regrel->name);
@@ -183,7 +191,7 @@ void open_pdb(const char* pdb_path) {
                 print("COMPILE2 SYMBOL\n");
             } else if (rec->rectyp == S_SECTION) {
                 struct SECTIONSYM* section = (struct SECTIONSYM*)cur_sym;
-                print("SECTION SYMBOL %s\n", section->name);
+                print("SECTION SYMBOL index %u, name %s, rva %u, size %u\n", section->isec, section->name, section->rva, section->cb);
             } else if (rec->rectyp == S_COFFGROUP) {
                 struct COFFGROUPSYM* coff = (struct COFFGROUPSYM*)cur_sym;
                 print("COFFGROUP SYMBOL %s\n", coff->name);
@@ -199,7 +207,7 @@ void open_pdb(const char* pdb_path) {
                 buildinfo;
                 print("BUILDINFO SYMBOL\n");
             } else {
-                print("Unkown symbole kind %xu\n", rec->rectyp);
+                print("Unknown symbol kind %xu\n", rec->rectyp);
             }
             cur_sym = (u8*)NextSym((SYMTYPE*)cur_sym);
         }

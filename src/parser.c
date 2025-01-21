@@ -3,6 +3,7 @@ enum TOKEN_TYPE {
     TOKEN_CONTINUE,
     TOKEN_CALLSTACK,
     TOKEN_LISTMODULE,
+    TOKEN_DUMP_SYMBOLS,
     TOKEN_PRINT_REG,
     TOKEN_STEP_INTO,
     TOKEN_DUMP_MEMORY,
@@ -32,10 +33,13 @@ struct ast_node {
     struct ast_node* right;
 };
 
+#define DECLARE_COMMAND(x) { .start = x, .size = sizeof(x) }
+
 static struct command commands[] = {
     { .start = "g", .size = 1 },
     { .start = "k", .size = 1 },
     { .start = "lm", .size = 2 },
+    DECLARE_COMMAND("x"),
     { .start = "r", .size = 1 },
     { .start = "t", .size = 1 },
     { .start = "db", .size = 2 },
@@ -140,6 +144,13 @@ struct ast_node* parse_command(struct token* tokens, struct ast_node* nodes) {
             cur_node->left = NULL;
             cur_node->right = NULL;
             return cur_node;
+        case TOKEN_DUMP_SYMBOLS:
+            tokens++;
+            print("TOKEN_DUMP_SYMBOLS\n");
+            cur_node->token = cur_token;
+            cur_node->left = NULL;
+            cur_node->right = NULL;
+            return cur_node;
         case TOKEN_PRINT_REG:
             tokens++;
             print("TOKEN_PRINT_REG\n");
@@ -158,8 +169,8 @@ struct ast_node* parse_command(struct token* tokens, struct ast_node* nodes) {
             tokens++;
             print("TOKEN_DUMP_MEMORY\n");
             cur_node->token = cur_token;
-            cur_node->left = NULL;
-            cur_node->right = parse_primary(tokens, ++nodes);
+            cur_node->left = parse_primary(tokens++, ++nodes);
+            cur_node->right = parse_primary(tokens++, ++nodes);
             return cur_node;
         case TOKEN_QUIT:
             tokens++;
@@ -202,18 +213,7 @@ void run(struct ast_node* root) {
         );
         process_commands = FALSE;
     } else if (cur_node.token->type == TOKEN_CALLSTACK) {
-        for (u8 index = 0U; index < 64U; index++) {
-            if (((1ULL << index) & modules_list) == 0U) {
-                struct module* module = &modules[index];
-                if ((u64)module->base_addr < ctx.Rip && ctx.Rip < ((u64)module->base_addr + module->nt_header.OptionalHeader.SizeOfImage)) {
-                    print("Module name %s\n", module->name);
-                    print("Module address %xu\n", (u64)module->base_addr);
-                    print("Module size %xu\n", module->nt_header.OptionalHeader.SizeOfImage);
-                    print("Function address %xu\n", ctx.Rip);
-                    print("Function offset in module %xu\n", ctx.Rip - (u64)module->base_addr);
-                }
-            }
-        }
+        walk_stack(&ctx);
     } else if (cur_node.token->type == TOKEN_LISTMODULE) {
         for (u8 index = 0U; index < 64U; index++) {
             if (((1ULL << index) & modules_list) == 0U) {
@@ -250,12 +250,13 @@ void run(struct ast_node* root) {
         is_open = FALSE;
         process_commands = FALSE;
     } else if (cur_node.token->type == TOKEN_DUMP_MEMORY) {
-        u64 addr = eval_number(cur_node.right);
-        u8 buf[16U] = { 0 };
+        u64 addr = eval_number(cur_node.left);
+        u64 size = eval_number(cur_node.right);
+        u8* buf = VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
-        if(read_memory((const void*)addr, (void*)buf, sizeof(buf))) {
-            for (u32 index = 0U; index < sizeof(buf); index++) {
-                print("%b ", buf[index]);
+        if(read_memory((const void*)addr, (void*)buf, size)) {
+            for (u32 index = 0U; index < size; index += 8U) {
+                print("%xb %xb %xb %xb %xb %xb %xb %xb\n", buf[index], buf[index + 1U], buf[index + 2U], buf[index + 3U], buf[index + 4U], buf[index + 5U], buf[index + 6U], buf[index + 7U]);
             }
             print("\n");
         } else {
@@ -263,6 +264,14 @@ void run(struct ast_node* root) {
             print("Unable to read memory at this address, error %u\n", GetLastError());
         }
 
+        VirtualFree(buf, size, MEM_RELEASE);
+    } else if (cur_node.token->type == TOKEN_DUMP_SYMBOLS) {
+        for (u8 index = 0U; index < 64U; index++) {
+            if (((1ULL << index) & modules_list) == 0U) {
+                struct module* module = &modules[index];
+                iterate(&module->symbols);
+            }
+        }
     } else {
         print("Command unknown\n");
         process_commands = TRUE;

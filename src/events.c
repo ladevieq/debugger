@@ -1,3 +1,5 @@
+const char* dummy_name = "Function_dummy_name";
+
 void read_name_uni(const void* name_addr, const char* name, size_t name_size) {
     u8* addr = NULL;
     if (!read_memory(name_addr, (void*)&addr, 8U)) {
@@ -35,7 +37,7 @@ void read_name_ansi(const void* name_addr, const char* name, size_t name_size) {
     }
 }
 
-void load_symbols(const void* base_addr, const struct module* module) {
+void load_symbols(const void* base_addr, struct module* module) {
     if (!read_memory(base_addr, (void*)&module->dos_header, sizeof(module->dos_header))) {
         print("Cannot read DOS header for module %s at address %x\n", (char*)module->name, base_addr);
         return;
@@ -61,29 +63,56 @@ void load_symbols(const void* base_addr, const struct module* module) {
             return;
         }
 
-        u16 name_ordinals[8192];
-        if (!read_memory((const void*)((u64)base_addr + (u64)export_dir.AddressOfNameOrdinals), (void*)&name_ordinals, export_dir.NumberOfNames * sizeof(name_ordinals[0]))) {
+        size_t ordinals_size = export_dir.NumberOfNames * sizeof(u16);
+        u16* ordinals = VirtualAlloc(NULL, ordinals_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (!read_memory((const void*)((u64)base_addr + (u64)export_dir.AddressOfNameOrdinals), (void*)ordinals, ordinals_size)) {
             print("Cannot read name ordinals from export directory for module %s at address %x\n", (char*)module->name, base_addr);
             return;
         }
 
-        u32 names[8192];
-        if (!read_memory((const void*)((u64)base_addr + (u64)export_dir.AddressOfNames), (void*)&names, export_dir.NumberOfNames * sizeof(names[0]))) {
+        size_t names_size = export_dir.NumberOfNames * sizeof(u32);
+        u32* names = VirtualAlloc(NULL, names_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (!read_memory((const void*)((u64)base_addr + (u64)export_dir.AddressOfNames), (void*)names, names_size)) {
             print("Cannot read names from export directory for module %s at address %x\n", (char*)module->name, base_addr);
             return;
         }
 
-        print("Found %u functions\n", export_dir.NumberOfNames);
-        for (u32 i = 0U; i < export_dir.NumberOfNames; i++) {
-            const char* func_name = (const char*)((u64)base_addr + names[name_ordinals[i]]);
-            if (export_dir_end < (void*)func_name || (void*)func_name < export_dir_start) {
-                print("%u : Fowarded function\n", i);
+        size_t addresses_size = export_dir.NumberOfFunctions * sizeof(u32);
+        u32* addresses = VirtualAlloc(NULL, addresses_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (!read_memory((const void*)((u64)base_addr + (u64)export_dir.AddressOfFunctions), (void*)addresses, addresses_size)) {
+            print("Cannot read functions addresses from export directory for module %s at address %x\n", (char*)module->name, base_addr);
+            return;
+        }
+
+        print("Found %u functions\n", export_dir.NumberOfFunctions);
+        for (u32 i = 0U; i < export_dir.NumberOfFunctions; i++) {
+            char func_name[256U] = { 0 };
+            u64 func_address = (u64)base_addr + addresses[i];
+            u32 name_index = 0U;
+            for (; name_index < export_dir.NumberOfNames; name_index++) {
+                if (ordinals[name_index] == i) {
+                    break;
+                }
+            }
+
+            u64 name_address = (u64)base_addr + names[name_index];
+            read_memory((void*)name_address, func_name, sizeof(func_name));
+
+            if (export_dir_start < (void*)func_address && (void*)func_address < export_dir_end) {
+                print("%u : Fowarded function : %s\n", i, func_name);
+            } else if (name_index && name_index < export_dir.NumberOfNames) {
+                print("%u : Function name : %s, function address %xu\n", i, func_name, addresses[i]);
+                insert_elem(&module->symbols, addresses[i], 0U, name_address);
             } else {
-                print("%u : Function name : %s\n", i, func_name);
+                print("%u : Function has no name, function address %xu\n", i, addresses[i]);
+                insert_elem(&module->symbols, addresses[i], 0U, (u64)dummy_name);
             }
         }
-    }
 
+        VirtualFree(names, names_size, MEM_RELEASE);
+        VirtualFree(addresses, addresses_size, MEM_RELEASE);
+        VirtualFree(ordinals, ordinals_size, MEM_RELEASE);
+    }
 
     // Private symbols
     IMAGE_DATA_DIRECTORY debug_table = module->nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
@@ -113,8 +142,122 @@ void load_symbols(const void* base_addr, const struct module* module) {
         }
 
         print("PDB path : %s\n", &header.path);
-        open_pdb(&header.path);
+        open_pdb(&header.path, module);
     }
+
+
+    // Expection directory
+    IMAGE_DATA_DIRECTORY exception_entry = module->nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+
+    if (exception_entry.Size == 0U) {
+        print("Exception directory is empty in module %s\n", module->name);
+    }
+
+    RUNTIME_FUNCTION* exception_table = VirtualAlloc(NULL, exception_entry.Size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!read_memory((const void*)((u64)base_addr + (u64)exception_entry.VirtualAddress), (void*)exception_table, exception_entry.Size)) {
+        print("Cannot read exception table for module %s at address %x\n", (char*)module->name, base_addr);
+        return;
+    }
+
+    // struct UNWIND_INFO* u_info = VirtualAlloc(NULL, 4096U, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    for (u32 index = 0U; index < exception_entry.Size / sizeof(exception_table[0U]); index++) {
+        RUNTIME_FUNCTION cur_entry = exception_table[index];
+
+        struct element* elem = find_elem(&module->symbols, cur_entry.BeginAddress);
+        if (elem == NULL) {
+            elem = insert_elem(&module->symbols, cur_entry.BeginAddress, cur_entry.EndAddress, 0ULL);
+        } else {
+            if (elem->name == 0U) {
+                print("function name %s\n", elem->name);
+            }
+
+            elem->end = cur_entry.EndAddress;
+        }
+
+        elem->unwind_offset = cur_entry.UnwindData;
+
+        // if (!read_memory((const void*)((u64)base_addr + (u64)cur_entry.UnwindData), (void*)u_info, 4096U)) {
+        //     print("Cannot read unwind info in for function %s\n", elem->name);
+        //     continue;
+        // }
+
+        // size_t total_size = sizeof(*u_info) + (u_info->count_of_unwind_codes - 1U) * sizeof(struct UNWIND_CODE);
+        // assert(total_size < 4096U);
+
+        // for (u32 code_index = 0U; code_index < u_info->count_of_unwind_codes; code_index++) {
+        //     struct UNWIND_CODE* cur_code = &u_info->unwind_code[code_index];
+        //     switch (cur_code->unwind_operation_code) {
+        //         case UWOP_PUSH_NONVOL:
+        //             print("push non volatile\n");
+        //             print("push ");
+        //             print_reg(cur_code->op_info);
+        //             break;
+        //         case UWOP_ALLOC_LARGE:
+        //             print("alloc large\n");
+        //             if (cur_code->op_info == 0U) {
+        //                 u16 size = *(u16*)&u_info->unwind_code[code_index + 1U];
+        //                 if (u_info->frame_register) {
+        //                     print("sub rbp %xu\n", size);
+        //                 } else {
+        //                     print("sub rsp %xu\n", size);
+        //                 }
+        //                 code_index++;
+        //             } else {
+        //                 u32 size = *(u32*)&u_info->unwind_code[code_index + 1U];
+        //                 if (u_info->frame_register) {
+        //                     print("sub rbp %xu\n", size);
+        //                 } else {
+        //                     print("sub rsp %xu\n", size);
+        //                 }
+        //                 code_index += 2U;
+        //             }
+        //             break;
+        //         case UWOP_ALLOC_SMALL:
+        //             print("alloc small\n");
+        //             u32 size = cur_code->op_info * 8U + 8U;
+        //             if (u_info->frame_register) {
+        //                 print("sub rbp %xu\n", size);
+        //             } else {
+        //                 print("sub rsp %xu\n", size);
+        //             }
+        //             break;
+        //         case UWOP_SET_FPREG:
+        //             print("set frame point reg\n");
+        //             print("mov rbp rsp - %xu\n", u_info->frame_register_offset * 16U);
+        //             break;
+        //         case UWOP_SAVE_NONVOL:
+        //             print("save non volatile\n");
+        //             if (u_info->frame_register) {
+        //                 print("mov rbp ");
+        //             } else {
+        //                 print("mov rsp ");
+        //             }
+        //             print_reg(cur_code->op_info);
+        //             code_index++;
+        //             break;
+        //         case UWOP_SAVE_NONVOL_FAR:
+        //             print("save non volatile far\n");
+        //             code_index += 2U;
+        //             break;
+        //         case UWOP_SAVE_XMM128:
+        //             print("save xmm128\n");
+        //             code_index++;
+        //             break;
+        //         case UWOP_SAVE_XMM128_FAR:
+        //             print("save xmm128 far\n");
+        //             code_index += 2U;
+        //             break;
+        //         case UWOP_PUSH_MACHFRAME:
+        //             print("push mach frame\n");
+        //             break;
+        //         default:
+        //             print("bad operation code\n");
+        //     }
+        // }
+    }
+
+    // VirtualFree(u_info, 4096U, MEM_RELEASE);
+    VirtualFree(exception_table, exception_entry.Size, MEM_RELEASE);
 }
 
 void handle_create_process() {
