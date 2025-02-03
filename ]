@@ -51,42 +51,18 @@ void load_symbols(const void* base_addr, struct module* module) {
     print("Module Base Address %xu\n", base_addr);
     print("Module Size %xu\n", module->nt_header.OptionalHeader.SizeOfImage);
 
-#ifndef HASHMAP
-    // Exception directory
-    IMAGE_DATA_DIRECTORY exception_entry = module->nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
-
-    if (exception_entry.Size == 0U) {
-        print("Exception directory is empty in module %s\n", module->name);
-    }
-
-    RUNTIME_FUNCTION* exception_table = VirtualAlloc(NULL, exception_entry.Size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!read_memory((const void*)((u64)base_addr + (u64)exception_entry.VirtualAddress), (void*)exception_table, exception_entry.Size)) {
-        print("Cannot read exception table for module %s at address %x\n", (char*)module->name, base_addr);
-        return;
-    }
-
-    u32 pdata_entries = exception_entry.Size / sizeof(exception_table[0U]);
-    module->functions_name = VirtualAlloc(NULL, pdata_entries * sizeof(module->functions_name[0U]), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    module->functions_start = VirtualAlloc(NULL, pdata_entries * sizeof(module->functions_start[0U]), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    module->functions_end = VirtualAlloc(NULL, pdata_entries * sizeof(module->functions_end[0U]), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    module->functions_unwind = VirtualAlloc(NULL, pdata_entries * sizeof(module->functions_unwind[0U]), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    module->functions_count = pdata_entries;
-    for (u32 index = 0U; index < pdata_entries; index++) {
-        RUNTIME_FUNCTION cur_entry = exception_table[index];
-        module->functions_start[index] = cur_entry.BeginAddress;
-        module->functions_end[index] = cur_entry.EndAddress;
-        module->functions_unwind[index] = cur_entry.UnwindData;
-        module->functions_name[index] = (u8*)dummy_name;
-    }
-#endif
-
     // Export table
     IMAGE_DATA_DIRECTORY export_table = module->nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
     IMAGE_EXPORT_DIRECTORY export_dir = { 0U };
     const void* export_dir_start = (const void*)((u64)base_addr + (u64)export_table.VirtualAddress);
     const void* export_dir_end = (const void*)((u64)export_dir_start + export_table.Size);
+
+#ifndef HASHMAP
+    u8** public_names = NULL;
+    u32* public_addresses = NULL;
+#endif
     if (export_table.Size != 0U) {
-        if (!read_memory(export_dir_start, (void*)&export_dir, sizeof(export_dir))) {
+        if (!read_memory((const void*)((u64)base_addr + (u64)export_table.VirtualAddress), (void*)&export_dir, sizeof(export_dir))) {
             print("Cannot read export dir for module %s at address %x\n", (char*)module->name, base_addr);
             return;
         }
@@ -100,6 +76,9 @@ void load_symbols(const void* base_addr, struct module* module) {
 
         size_t names_size = export_dir.NumberOfNames * sizeof(u32);
         u32* names_address = VirtualAlloc(NULL, names_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#ifndef HASHMAP
+        external_names = VirtualAlloc(NULL, export_dir.NumberOfNames * sizeof(external_names[0U]), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#endif
         if (!read_memory((const void*)((u64)base_addr + (u64)export_dir.AddressOfNames), (void*)names_address, names_size)) {
             print("Cannot read names from export directory for module %s at address %x\n", (char*)module->name, base_addr);
             return;
@@ -107,57 +86,35 @@ void load_symbols(const void* base_addr, struct module* module) {
 
         size_t addresses_size = export_dir.NumberOfFunctions * sizeof(u32);
         u32* addresses = VirtualAlloc(NULL, addresses_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#ifndef HASHMAP
+        external_addresses = addresses;
+#endif
         if (!read_memory((const void*)((u64)base_addr + (u64)export_dir.AddressOfFunctions), (void*)addresses, addresses_size)) {
             print("Cannot read functions addresses from export directory for module %s at address %x\n", (char*)module->name, base_addr);
             return;
         }
 
 #ifndef HASHMAP
-        // u32 global_functions_index = 0U;
         for (u32 i = 0U; i < export_dir.NumberOfFunctions; i++) {
-            u64 address = (u64)base_addr + addresses[i];
-            u32 name_index = 0U;
-            u8* name = string_stack_current;
-            size_t length = 0U;
-            for (; name_index < export_dir.NumberOfNames; name_index++) {
+            for (u32 name_index = 0U; name_index < export_dir.NumberOfNames; name_index++) {
                 if (ordinals[name_index] == i) {
                     // TODO: Add string management code
                     assert(string_stack_current - 16U * 4096U < string_stack_base);
+                    size_t length = 0U;
                     void* name_address = (void*)((u64)module->base_addr + names_address[name_index]);
-                    read_memory(name_address, name, 256U);
-                    StringCchLengthA((PCNZCH)name, STRSAFE_MAX_CCH, &length);
-                    break;
-                }
-            }
-
-            if (name_index == export_dir.NumberOfNames) {
-                print("%u : Function has no name, function address %xu\n", i, addresses[i]);
-                continue;
-            }
-
-            if (export_dir_start < (void*)address && (void*)address < export_dir_end) {
-                print("%u : Fowarded function : %s\n", i, name);
-                continue;
-            }
-
-            u32 global_functions_index = 0U;
-            for(; global_functions_index < module->functions_count; global_functions_index++) {
-                if (module->functions_start[global_functions_index] == addresses[i]) {
+                    read_memory(name_address, string_stack_current, 256U);
+                    StringCchLengthA((PCNZCH)string_stack_current, STRSAFE_MAX_CCH, &length);
                     string_stack_current[length] = '\0';
-                    module->functions_name[global_functions_index] = name;
+                    external_names[i] = string_stack_current;
                     string_stack_current += length + 1U;
-                    print("%u : Function name : %s, function address %xu\n", i, name, addresses[i]);
                     break;
                 }
-            }
-
-            if (global_functions_index == module->functions_count) {
-                print("Function not found : %s!\n", string_stack_current);
             }
         }
+
+        init_module_functions(module, external_names, external_addresses, NULL, NULL, export_dir.NumberOfFunctions);
 #endif
 
-#ifdef HASHMAP
         print("Found %u functions\n", export_dir.NumberOfFunctions);
         for (u32 i = 0U; i < export_dir.NumberOfFunctions; i++) {
             char func_name[256U] = { 0 };
@@ -176,23 +133,31 @@ void load_symbols(const void* base_addr, struct module* module) {
                 print("%u : Fowarded function : %s\n", i, func_name);
             } else if (name_index && name_index < export_dir.NumberOfNames) {
                 print("%u : Function name : %s, function address %xu\n", i, func_name, addresses[i]);
+#ifdef HASHMAP
                 insert_elem(&module->symbols, addresses[i], 0U, name_address);
+#endif
             } else {
                 print("%u : Function has no name, function address %xu\n", i, addresses[i]);
+#ifdef HASHMAP
                 insert_elem(&module->symbols, addresses[i], 0U, (u64)dummy_name);
+#endif
             }
         }
-#endif
 
         VirtualFree(names_address, names_size, MEM_RELEASE);
         VirtualFree(ordinals, ordinals_size, MEM_RELEASE);
+#ifdef HASHMAP
         VirtualFree(addresses, addresses_size, MEM_RELEASE);
+#endif
     }
 
     // Private symbols
     IMAGE_DATA_DIRECTORY debug_table = module->nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
     IMAGE_DEBUG_DIRECTORY debug_entries[20U] = { 0U };
 
+    u8** private_names = NULL;
+    u32* private_starts = NULL;
+    u32* private_ends = NULL;
     if (debug_table.VirtualAddress && !read_memory((const void*)((u64)base_addr + (u64)debug_table.VirtualAddress), debug_entries, debug_table.Size)) {
         print("Cannot read image debug infos for module %s at address %x\n", module->name, base_addr);
         return;
@@ -219,7 +184,6 @@ void load_symbols(const void* base_addr, struct module* module) {
     }
 
 
-#ifdef HASHMAP
     // Exception directory
     IMAGE_DATA_DIRECTORY exception_entry = module->nt_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
 
@@ -233,11 +197,15 @@ void load_symbols(const void* base_addr, struct module* module) {
         return;
     }
 
-    // Find unwind info offset
+    // TODO: Merge private and public symbols
+
     u32 pdata_entries = exception_entry.Size / sizeof(exception_table[0U]);
+    u32* unwind_offsets = VirtualAlloc(NULL, pdata_entries * sizeof(unwind_offsets[0U]), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    // Find unwind info offset
     for (u32 index = 0U; index < pdata_entries; index++) {
         RUNTIME_FUNCTION cur_entry = exception_table[index];
 
+#ifdef HASHMAP
         struct element* elem = find_elem(&module->symbols, cur_entry.BeginAddress);
         if (elem == NULL) {
             elem = insert_elem(&module->symbols, cur_entry.BeginAddress, cur_entry.EndAddress, 0ULL);
@@ -250,6 +218,19 @@ void load_symbols(const void* base_addr, struct module* module) {
         }
 
         elem->unwind_offset = cur_entry.UnwindData;
+#else
+        if (module->functions_start == cur_entry.BeginAddress) {
+            pdata_entries[i] = cur_entry.UnwindData;
+        }
+        // u32 sym_index = find_function(module, cur_entry.BeginAddress);
+        // if (sym_index == (u32)-1) {
+        //     // TODO: Add element
+        //     add_functions(module, NULL, (u32*)&cur_entry.BeginAddress, (u32*)&cur_entry.EndAddress, (u32*)&cur_entry.UnwindData, 1U);
+        //     assert(FALSE);
+        // } else {
+        //     module->functions_unwind[sym_index] = cur_entry.UnwindData;
+        // }
+#endif
 
         // if (!read_memory((const void*)((u64)base_addr + (u64)cur_entry.UnwindData), (void*)u_info, 4096U)) {
         //     print("Cannot read unwind info in for function %s\n", elem->name);
@@ -330,7 +311,6 @@ void load_symbols(const void* base_addr, struct module* module) {
         //     }
         // }
     }
-#endif
 
     // VirtualFree(u_info, 4096U, MEM_RELEASE);
     VirtualFree(exception_table, exception_entry.Size, MEM_RELEASE);

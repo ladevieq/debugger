@@ -269,7 +269,13 @@ void run(struct ast_node* root) {
         for (u8 index = 0U; index < 64U; index++) {
             if (((1ULL << index) & modules_list) == 0U) {
                 struct module* module = &modules[index];
+#ifdef HASHMAP
                 iterate(&module->symbols);
+#else
+                for (u32 sym_index = 0U; sym_index < module->functions_count; sym_index++) {
+                    print("%s\n", module->functions_name[index]);
+                }
+#endif
             }
         }
     } else {

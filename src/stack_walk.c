@@ -130,16 +130,6 @@ void print_reg(enum UNWIND_OP_INFO_TYPE op_info) {
     }
 }
 
-struct element* find_function(struct module* module, u64 rip_offset) {
-    for (u32 sym_index = 0U; sym_index < module->symbols.capacity; sym_index++) {
-        struct element* cur_sym = &module->symbols.arr[sym_index];
-        if (cur_sym->start != 0U && cur_sym->start <= rip_offset && rip_offset < cur_sym->end) {
-            return cur_sym;
-        }
-    }
-    return NULL;
-}
-
 void walk_stack(CONTEXT* ctx) {
     u64 addr = ctx->Rip;
     u64 rsp = ctx->Rsp;
@@ -148,6 +138,11 @@ void walk_stack(CONTEXT* ctx) {
     struct UNWIND_INFO* u_info = VirtualAlloc(NULL, 4096U, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     while (addr) {
         module = get_addr_module(addr);
+
+        if (module == NULL) {
+            print("Module not found!\n");
+            return;
+        }
         // print("Module name %s\n", module->name);
         // print("Module address %xu\n", (u64)module->base_addr);
         // print("Module size %xu\n", module->nt_header.OptionalHeader.SizeOfImage);
@@ -156,23 +151,37 @@ void walk_stack(CONTEXT* ctx) {
         // print("Function address %xu\n", addr);
         // print("Function offset in module %xu\n", addr - (u64)module->base_addr);
 
-        struct element* sym = find_function(module, addr - (u64)module->base_addr);
+#ifdef HASHMAP
+        struct element* sym = find_function(module, (u32)(addr - (u64)module->base_addr));
         if (sym == NULL) {
+#else
+        u32 sym_index = find_function(module, addr - (u64)module->base_addr);
+        if (sym_index == (u32)-1) {
+#endif
             print("No symbol found at address %xu\n", addr);
 
             addr = *(u64*)rsp;
             continue;
         }
+#ifdef HASHMAP
+        void* name = (void*)sym->name;
+        u64 unwind_offset = sym->unwind_offset;
+        u32 start = sym->start;
 
         u8 buffer[4096U];
-        read_memory((void*)sym->name, buffer, 4096U);
-        // print("Buffer is %s!%s\n", module->name, buffer);
-        print("%s!%s\n", module->name, sym->name);
+        read_memory(name, buffer, 4096U);
+        print("Buffer is %s!%s\n", module->name, buffer);
+#else
+        u8* name = module->functions_name[sym_index];
+        u64 unwind_offset = module->functions_unwind[sym_index];
+        u32 start = module->functions_start[sym_index];
+#endif
+        print("%s!%s\n", module->name, name);
         // print("rsp value is %xu\n", rsp);
         // print("rbp value is %xu\n", rbp);
 
-        if (!read_memory((const void*)((u64)module->base_addr + (u64)sym->unwind_offset), (void*)u_info, 4096U)) {
-            print("Cannot read unwind info in for function %s\n", sym->name);
+        if (!read_memory((const void*)((u64)module->base_addr + unwind_offset), (void*)u_info, 4096U)) {
+            print("Cannot read unwind info in for function %s\n", name);
             continue;
         }
 
@@ -180,12 +189,12 @@ void walk_stack(CONTEXT* ctx) {
         assert(total_size < 4096U);
 
         // TODO: Do this once for the first function
-        if (sym->start <= addr && addr < u_info->size_of_prolog) {
+        if (start <= addr && addr < u_info->size_of_prolog) {
             // print("RIP is in prolog\n");
         } else if (1) {
             // print("RIP is in epilog\n");
             // u8* byte_code = (u8*)addr;
-            addr = (u64)module->base_addr + sym->start + u_info->size_of_prolog;
+            addr = (u64)module->base_addr + start + u_info->size_of_prolog;
         } else {
             // print("RIP is in body\n");
         }

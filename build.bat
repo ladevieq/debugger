@@ -25,7 +25,8 @@ if EXIST %VS2022_PRO% (
 
 
 :compilation
-set C_FLAGS=/nologo /W4 /WX /Zi /GS- /GR- /Gs1000000000 /Fo:%BUILD_DIR%\ /Iinclude /Isrc /std:c17 /c /Tc
+set C_FLAGS=/DHASHMAP /nologo /W4 /WX /Zi /GS- /GR- /Gs1000000000 /Fo:%BUILD_DIR%\ /Iinclude /Isrc /std:c17 /c /Tc
+REM set C_FLAGS=/nologo /W4 /WX /Zi /GS- /GR- /Gs1000000000 /Fo:%BUILD_DIR%\ /Iinclude /Isrc /std:c17 /c /Tc
 set L_FLAGS=/WX /SUBSYSTEM:CONSOLE /NODEFAULTLIB /stack:0x100000,100000
 
 if "%release%"=="0" (

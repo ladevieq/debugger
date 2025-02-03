@@ -88,7 +88,7 @@ void dbg_loop() {
 
 int mainCRTStartup() {
 
-    string_stack_current = string_stack_base = VirtualAlloc(NULL, 4096U * 16U, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    string_stack_current = string_stack_base = VirtualAlloc(NULL, 4096U * 64U, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 
     STARTUPINFOA startup_info = { 0 };
     startup_info.cb = sizeof(startup_info);
