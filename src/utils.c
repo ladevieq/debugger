@@ -1,9 +1,7 @@
-#if defined (_DEBUG)
-#define assert(x) if (!(x)) __debugbreak();
-#else
-#define assert(x) (x)
-#endif
-void print(const char* format, ...);
+#include "utils.h"
+
+#include <Windows.h>
+#include <strsafe.h>
 
 u8 is_alpha(char c) {
     return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z');
@@ -154,4 +152,14 @@ void print(const char* format, ...) {
     size_t length = 0U;
     StringCchLengthA(formatted_str, sizeof(formatted_str), &length);
     SUCCEEDED(WriteFile(standard_err, formatted_str, (DWORD)length, NULL, NULL));
+}
+
+/* Read debugged process memory at address */
+u8 read_memory(const void* addr, void* buffer, size_t size) {
+    extern PROCESS_INFORMATION proc_info;
+
+    size_t b_read = 0U;
+    HRESULT hr = ReadProcessMemory(proc_info.hProcess, addr, buffer, size, &b_read);
+
+    return hr > 0 && b_read == size;
 }

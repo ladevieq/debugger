@@ -1,4 +1,9 @@
+#include <Windows.h>
+#include <strsafe.h>
 #include "cvinfo.h"
+
+#include "types.h"
+#include "utils.h"
 
 enum STREAM_INDEX {
     OLD_DIRECTORY,

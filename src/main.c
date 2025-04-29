@@ -4,29 +4,18 @@
 
 #include "types.h"
 
-#include "utils.c"
+#include "utils.h"
+#include "events.h"
+#include "parser.h"
 
-static HANDLE h_input = NULL;
-static HANDLE h_output = NULL;
-static u8 is_open = TRUE;
-static u8 process_commands = TRUE;
-static u8 expect_single_step = FALSE;
-static DWORD continue_status = DBG_EXCEPTION_NOT_HANDLED;
-static DEBUG_EVENT dbg_event;
-static PROCESS_INFORMATION proc_info = { 0 };
+u8 is_open = TRUE;
+u8 process_commands = TRUE;
 
-/* Read debugged process memory at address */
-u8 read_memory(const void* addr, void* buffer, size_t size) {
-    size_t b_read = 0U;
-    HRESULT hr = ReadProcessMemory(proc_info.hProcess, addr, buffer, size, &b_read);
-
-    return hr > 0 && b_read == size;
-}
-
-#include "module.c"
-#include "parser.c"
-#include "pdb.c"
-#include "events.c"
+HANDLE h_input = NULL;
+HANDLE h_output = NULL;
+DEBUG_EVENT dbg_event;
+PROCESS_INFORMATION proc_info = { 0 };
+DWORD continue_status = DBG_EXCEPTION_NOT_HANDLED;
 
 void dbg_loop() {
     while(is_open) {

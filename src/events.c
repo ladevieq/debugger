@@ -1,4 +1,15 @@
-void read_name_uni(const void* name_addr, const char* name, size_t name_size) {
+#include <Windows.h>
+
+#include "types.h"
+#include "utils.h"
+#include "module.h"
+#include "pdb.h"
+
+u8 expect_single_step = FALSE;
+
+extern DEBUG_EVENT dbg_event;
+
+static void read_name_uni(const void* name_addr, const char* name, size_t name_size) {
     u8* addr = NULL;
     if (!read_memory(name_addr, (void*)&addr, 8U)) {
         print("%s %u\n", "Loading DLL : error reading dll name : ", GetLastError());
@@ -143,6 +154,8 @@ void handle_create_thread() {
 }
 
 void handle_exception() {
+    extern DWORD continue_status;
+
     print("%s : ", "ExceptionDebugEvent");
 
     if (dbg_event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP && expect_single_step) {

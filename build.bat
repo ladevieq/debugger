@@ -33,13 +33,17 @@ if "%release%"=="0" (
     set L_FLAGS=/DEBUG %L_FLAGS%
 )
 
+set src=main utils events module parser pdb
 
 :: DBG
 :: Compile
-cl /Fd:%BUILD_DIR%\main.pdb %C_FLAGS% src\main.c
+(for %%s in (%src%) do (
+    call set OBJS=%%OBJS%% %BUILD_DIR%\%%s.obj
+    cl /Fd:%BUILD_DIR%\%%s.pdb %C_FLAGS% src\%%s.c
+))
 
 :: Link
-link %L_FLAGS% /OUT:%BUILD_DIR%\main.exe %BUILD_DIR%\main.obj kernel32.lib
+link %L_FLAGS% /OUT:%BUILD_DIR%\main.exe %OBJS% kernel32.lib
 
 :: Test program
 set SRC_FILE=test

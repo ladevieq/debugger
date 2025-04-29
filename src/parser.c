@@ -1,3 +1,12 @@
+#include <Windows.h>
+
+#include "types.h"
+#include "utils.h"
+#include "module.h"
+
+extern u8 expect_single_step;
+extern DWORD continue_status;
+
 enum TOKEN_TYPE {
     // Commands
     TOKEN_CONTINUE,
@@ -183,6 +192,10 @@ u64 eval_number(const struct ast_node* node) {
 }
 
 void run(struct ast_node* root) {
+    extern DEBUG_EVENT dbg_event;
+    extern u8 process_commands;
+    extern u8 is_open;
+
     struct ast_node cur_node = root[0];
     CONTEXT ctx = {
         .ContextFlags = CONTEXT_ALL,
