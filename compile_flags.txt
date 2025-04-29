@@ -8,6 +8,5 @@
 include/
 -I
 src/
--std:c17
 -c
 -TC

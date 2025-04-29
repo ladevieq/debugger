@@ -8,6 +8,8 @@
 #include "events.h"
 #include "parser.h"
 
+extern u32 _fltused = TRUE;
+
 u8 is_open = TRUE;
 u8 process_commands = TRUE;
 
@@ -16,6 +18,9 @@ HANDLE h_output = NULL;
 DEBUG_EVENT dbg_event;
 PROCESS_INFORMATION proc_info = { 0 };
 DWORD continue_status = DBG_EXCEPTION_NOT_HANDLED;
+// TODO: Perfect hashing table ?
+u8* string_stack_base = NULL;
+u8* string_stack_current = NULL;
 
 void dbg_loop() {
     while(is_open) {
@@ -69,12 +74,14 @@ void dbg_loop() {
 
 int mainCRTStartup() {
 
-    STARTUPINFOW startup_info = { 0 };
+    string_stack_current = string_stack_base = VirtualAlloc(NULL, 4096U * 64U, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+
+    STARTUPINFOA startup_info = { 0 };
     startup_info.cb = sizeof(startup_info);
 
-    BOOL ret = CreateProcessW(
+    BOOL ret = CreateProcessA(
         NULL,
-        L"./test.exe",
+        "./test.exe",
         NULL,
         NULL,
         FALSE,

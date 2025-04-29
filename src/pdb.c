@@ -1,8 +1,8 @@
-#include <Windows.h>
+#include "pdb.h"
+
 #include <strsafe.h>
 #include "cvinfo.h"
 
-#include "types.h"
 #include "utils.h"
 
 enum STREAM_INDEX {
@@ -13,7 +13,10 @@ enum STREAM_INDEX {
     IPI,
 };
 
-void open_pdb(const char* pdb_path) {
+extern u8* string_stack_base;
+extern u8* string_stack_current;
+
+void open_pdb(const char* pdb_path, struct module* module) {
     HANDLE pdb_file = CreateFileA(pdb_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
     if (pdb_file == INVALID_HANDLE_VALUE) {
@@ -134,6 +137,7 @@ void open_pdb(const char* pdb_path) {
     ReadFile(pdb_file, (void*)&DBI_block, sizeof(DBI_block), (LPDWORD)&b_read, NULL);
     struct DBI_stream_header* DBI_stream_header = (struct DBI_stream_header*)DBI_block;
 
+    // Read Module Info Substreams
     i32 byte_index = sizeof(*DBI_stream_header);
     for (u32 module_index = 0U; byte_index < DBI_stream_header->mod_info_size; module_index++) {
         modules_info[module_index] = (struct mod_info*)&DBI_block[byte_index];
@@ -152,14 +156,14 @@ void open_pdb(const char* pdb_path) {
         module_info_size = ((module_info_size + 3U) / 4U) * 4U;
         byte_index += module_info_size;
 
-        // Module Info Stream
+        // Read curren Module Info Stream
         u8 module_info_block[4096U] = { 0U };
         SetFilePointer(pdb_file, stream_blocks_indices[modules_info[module_index]->ModuleSymStream][0U] * sizeof(module_info_block), NULL, FILE_BEGIN);
         ReadFile(pdb_file, (void*)&module_info_block, sizeof(module_info_block), (LPDWORD)&b_read, NULL);
 
         u8* symbols = &module_info_block[4U];
         u8* cur_sym = symbols;
-        while ((u32)(cur_sym - symbols) < modules_info[module_index]->SymByteSize) {
+        while ((u32)(cur_sym - symbols) < modules_info[module_index]->SymByteSize - 4U) {
             struct SYMTYPE* rec = (struct SYMTYPE*)cur_sym;
             if (rec->rectyp == S_END) {
                 print("END SYMBOL\n");
@@ -179,6 +183,24 @@ void open_pdb(const char* pdb_path) {
             } else if (rec->rectyp == S_GPROC32) {
                 struct PROCSYM32* proc = (struct PROCSYM32*)cur_sym;
                 print("PROC32 SYMBOL %s\n", proc->name);
+                // TODO: Add string management code
+                assert(string_stack_current - 16U * 4096U < string_stack_base);
+                size_t length = 0U;
+                StringCchLengthA((PCNZCH)proc->name, STRSAFE_MAX_CCH, &length);
+                StringCchCopyA((LPSTR)string_stack_current, STRSAFE_MAX_CCH, (LPCSTR)proc->name);
+                string_stack_current[length] = '\0';
+                u32 start_address = proc->off + module->nt_header.OptionalHeader.BaseOfCode;
+#ifdef HASHMAP
+                insert_elem(&module->symbols, start_address, proc->len + module->nt_header.OptionalHeader.BaseOfCode, (u64)string_stack_current);
+#else
+                for (u32 index = 0U; index < module->functions_count; index++) {
+                    if (module->functions_start[index] == start_address) {
+                        module->functions_name[index] = string_stack_current;
+                        break;
+                    }
+                }
+#endif
+                string_stack_current += length + 1U;
             } else if (rec->rectyp == S_REGREL32) {
                 struct REGREL32* regrel = (struct REGREL32*)cur_sym;
                 print("REGREL32 SYMBOL %s\n", regrel->name);
@@ -188,7 +210,7 @@ void open_pdb(const char* pdb_path) {
                 print("COMPILE2 SYMBOL\n");
             } else if (rec->rectyp == S_SECTION) {
                 struct SECTIONSYM* section = (struct SECTIONSYM*)cur_sym;
-                print("SECTION SYMBOL %s\n", section->name);
+                print("SECTION SYMBOL index %u, name %s, rva %u, size %u\n", section->isec, section->name, section->rva, section->cb);
             } else if (rec->rectyp == S_COFFGROUP) {
                 struct COFFGROUPSYM* coff = (struct COFFGROUPSYM*)cur_sym;
                 print("COFFGROUP SYMBOL %s\n", coff->name);
@@ -204,7 +226,7 @@ void open_pdb(const char* pdb_path) {
                 buildinfo;
                 print("BUILDINFO SYMBOL\n");
             } else {
-                print("Unkown symbole kind %xu\n", rec->rectyp);
+                print("Unknown symbol kind %xu\n", rec->rectyp);
             }
             cur_sym = (u8*)NextSym((SYMTYPE*)cur_sym);
         }
@@ -217,4 +239,6 @@ void open_pdb(const char* pdb_path) {
     // Public Symbol Stream
     SetFilePointer(pdb_file, stream_blocks_indices[DBI_stream_header->public_stream_index][0U] * sizeof(block), NULL, FILE_BEGIN);
     ReadFile(pdb_file, (void*)&block, sizeof(block), (LPDWORD)&b_read, NULL);
+
+    CloseHandle(pdb_file);
 }
