@@ -18,6 +18,7 @@ enum TOKEN_TYPE {
     TOKEN_PRINT_REG,
     TOKEN_STEP_INTO,
     TOKEN_DUMP_MEMORY,
+    TOKEN_UNASSEMBLE,
     TOKEN_QUIT,
 
     // Primaries
@@ -47,14 +48,15 @@ struct ast_node {
 #define DECLARE_COMMAND(x) { .start = x, .size = sizeof(x) }
 
 static struct command commands[] = {
-    { .start = "g", .size = 1 },
-    { .start = "k", .size = 1 },
-    { .start = "lm", .size = 2 },
+    DECLARE_COMMAND("g"),
+    DECLARE_COMMAND("k"),
+    DECLARE_COMMAND("lm"),
     DECLARE_COMMAND("x"),
-    { .start = "r", .size = 1 },
-    { .start = "t", .size = 1 },
-    { .start = "db", .size = 2 },
-    { .start = "q", .size = 1 },
+    DECLARE_COMMAND("r"),
+    DECLARE_COMMAND("t"),
+    DECLARE_COMMAND("db"),
+    DECLARE_COMMAND("u"),
+    DECLARE_COMMAND("q"),
 };
 
 _Static_assert((sizeof(commands) / sizeof(commands[0])) == TOKEN_QUIT + 1, "Missing commands");
@@ -183,6 +185,13 @@ struct ast_node* parse_command(struct token* tokens, struct ast_node* nodes) {
             cur_node->left = parse_primary(tokens++, ++nodes);
             cur_node->right = parse_primary(tokens++, ++nodes);
             return cur_node;
+        case TOKEN_UNASSEMBLE:
+            tokens++;
+            print("TOKEN_UNASSEMBLE\n");
+            cur_node->token = cur_token;
+            cur_node->left = NULL;
+            cur_node->right = NULL;
+            return cur_node;
         case TOKEN_QUIT:
             tokens++;
             print("TOKEN_QUIT\n");
@@ -291,6 +300,16 @@ void run(struct ast_node* root) {
                 }
 #endif
             }
+        }
+    } else if (cur_node.token->type == TOKEN_UNASSEMBLE) {
+        struct module* module = get_addr_module(ctx.Rip);
+        u32 sym_index = find_function(module, ctx.Rip - (u64)module->base_addr);
+        if (sym_index != (u32)-1) {
+            u32 start = module->functions_start[sym_index];
+            u32 end = module->functions_end[sym_index];
+            unassemble((u8*)module->base_addr + start, end - start);
+        } else {
+            print("No symbol found at address %xu\n", ctx.Rip);
         }
     } else {
         print("Command unknown\n");

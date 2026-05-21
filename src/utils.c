@@ -84,6 +84,13 @@ u64 atou64(const char* str, u32 len) {
     return number;
 }
 
+void fill_chars(u8* ptr, u8 c, u32 len) {
+    for (u32 index = 0U; index < len; index++) {
+        *ptr = c;
+        ptr++;
+    }
+}
+
 void print(const char* format, ...) {
     va_list args;
     va_start(args, format);
@@ -94,24 +101,41 @@ void print(const char* format, ...) {
     while(*cur_fmt != '\0') {
         if(*cur_fmt == '%') {
             cur_fmt++;
+            const char* num_start = cur_fmt;
+            u8 num_len = 0U;
+            u64 fill_count = 0U;
+            while (is_decimal_digit(*cur_fmt)) {
+                cur_fmt++;
+                num_len++;
+            }
+
+            if (num_len > 0U) {
+                fill_count = atou64(num_start, num_len);
+            }
+
             if (*cur_fmt == 's') {
                 const char* str = va_arg(args, const char*);
                 if(str != NULL) {
                     size_t length = 0U;
                     StringCchLengthA(str, sizeof(formatted_str), &length);
+                    i64 relative_fill_count = fill_count - length;
+                    if (relative_fill_count > 0) {
+                        fill_chars((u8*)cur_char, ' ', (u32)relative_fill_count);
+                        cur_char += relative_fill_count;
+                    }
                     StringCchCatA(cur_char, length + 1U, str);
                     cur_char += length;
                 }
             } else if(*cur_fmt == 'c') {
                 char c = va_arg(args, char);
+                if (fill_count > 1U) {
+                    fill_chars((u8*)cur_char, ' ', (u32)fill_count - 1U);
+                    cur_char += fill_count - 1U;
+                }
                 StringCchCatA(cur_char, 1U, &c);
                 cur_char += 1U;
             } else if (*cur_fmt == 'x' && is_alpha(cur_fmt[1])) {
                 u32 base = 16U;
-                *cur_char = '0';
-                cur_char++;
-                *cur_char = 'x';
-                cur_char++;
                 cur_fmt++;
 
                 if(*cur_fmt == 'b') {
